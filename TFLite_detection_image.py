@@ -20,6 +20,8 @@ import numpy as np
 import sys
 import glob
 import importlib.util
+import time
+import re 
 
 # Define and parse input arguments
 parser = argparse.ArgumentParser()
@@ -37,7 +39,11 @@ parser.add_argument('--imagedir', help='Name of the folder containing images to 
                     default=None)
 parser.add_argument('--edgetpu', help='Use Coral Edge TPU Accelerator to speed up detection',
                     action='store_true')
-
+parser.add_argument('--show-image', dest='showimage', help="Show images while inferencing (helps to avoid no X server if Rpi running in headless mode", action='store_true')
+parser.add_argument('--dont-show-image', dest='showimage', help="Don't show images while inferencing (helps to avoid no X server if Rpi running in headless mode", action='store_false')
+parser.set_defaults(showimage=True)
+parser.add_argument('--outputdir', help='Folder to store images with boxes after detection', required=True)
+parser.add_argument('--imageext', help="Image extension to serach in imagedir", default="JPEG")
 args = parser.parse_args()
 
 MODEL_NAME = args.modeldir
@@ -85,7 +91,7 @@ CWD_PATH = os.getcwd()
 # Define path to images and grab all image filenames
 if IM_DIR:
     PATH_TO_IMAGES = os.path.join(CWD_PATH,IM_DIR)
-    images = glob.glob(PATH_TO_IMAGES + '/*')
+    images = glob.glob(PATH_TO_IMAGES + '/*.' + args.imageext)
 
 elif IM_NAME:
     PATH_TO_IMAGES = os.path.join(CWD_PATH,IM_NAME)
@@ -98,9 +104,10 @@ PATH_TO_CKPT = os.path.join(CWD_PATH,MODEL_NAME,GRAPH_NAME)
 PATH_TO_LABELS = os.path.join(CWD_PATH,MODEL_NAME,LABELMAP_NAME)
 
 # Load the label map
+labels = {}
 with open(PATH_TO_LABELS, 'r') as f:
-    labels = [line.strip() for line in f.readlines()]
-
+    labels = {int(re.split('\s+',  line.strip())[0]) : re.split('\s+',  line.strip())[1] for line in f.readlines()}
+print(labels)
 # Have to do a weird fix for label map if using the COCO "starter model" from
 # https://www.tensorflow.org/lite/models/object_detection/overview
 # First label is '???', which has to be removed.
@@ -130,8 +137,11 @@ input_mean = 127.5
 input_std = 127.5
 
 # Loop over every image and perform detection
-for image_path in images:
 
+process_start = time.time()
+inference_times = []
+for image_path in images:
+    print(image_path)
     # Load image and resize to expected shape [1xHxWx3]
     image = cv2.imread(image_path)
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -145,8 +155,9 @@ for image_path in images:
 
     # Perform the actual detection by running the model with the image as input
     interpreter.set_tensor(input_details[0]['index'],input_data)
+    inference_time_start = time.time()
     interpreter.invoke()
-
+    inference_times.append(time.time() - inference_time_start)
     # Retrieve detection results
     boxes = interpreter.get_tensor(output_details[0]['index'])[0] # Bounding box coordinates of detected objects
     classes = interpreter.get_tensor(output_details[1]['index'])[0] # Class index of detected objects
@@ -167,7 +178,11 @@ for image_path in images:
             cv2.rectangle(image, (xmin,ymin), (xmax,ymax), (10, 255, 0), 2)
 
             # Draw label
-            object_name = labels[int(classes[i])] # Look up object name from "labels" array using class index
+            class_id = int(classes[i])
+            if not class_id in labels: 
+                print(f"Class with id {class_id} not in labels index")
+                continue
+            object_name = labels[class_id] # Look up object name from "labels" array using class index
             label = '%s: %d%%' % (object_name, int(scores[i]*100)) # Example: 'person: 72%'
             labelSize, baseLine = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2) # Get font size
             label_ymin = max(ymin, labelSize[1] + 10) # Make sure not to draw label too close to top of window
@@ -175,11 +190,24 @@ for image_path in images:
             cv2.putText(image, label, (xmin, label_ymin-7), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2) # Draw label text
 
     # All the results have been drawn on the image, now display the image
-    cv2.imshow('Object detector', image)
-
+    if args.showimage:
+        cv2.imshow('Object detector', image)
+        if cv2.waitKey(0) == ord('q'):
+            break
+    image_name_only = os.path.basename(image_path)
+    output_image_path = os.path.join(args.outputdir, image_name_only)
+    cv2.imwrite(output_image_path, image)
     # Press any key to continue to next image, or press 'q' to quit
-    if cv2.waitKey(0) == ord('q'):
-        break
+
+whole_process_time = time.time() - process_start
+print("Summary")
+print(f"Whole process took {whole_process_time}")
+if len(inference_times) > 0:
+    print(f"Inferenced for {len(inference_times)} images")
+    print(f"Average time was {sum(inference_times)/len(inference_times)} ")
+    print(inference_times)
+else:
+    print("No images processed.")
 
 # Clean up
 cv2.destroyAllWindows()
