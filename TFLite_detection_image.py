@@ -44,6 +44,9 @@ parser.add_argument('--dont-show-image', dest='showimage', help="Don't show imag
 parser.set_defaults(showimage=True)
 parser.add_argument('--outputdir', help='Folder to store images with boxes after detection', required=True)
 parser.add_argument('--imageext', help="Image extension to serach in imagedir", default="JPEG")
+parser.add_argument('--inversed-tensors', dest='inversed_tensors', help="Change the detection tensors order meaning (for some reasons some customized mobilenet fpn has tensors messed up", action='store_true')
+parser.set_defaults(inversed_tensors=False)
+
 args = parser.parse_args()
 
 MODEL_NAME = args.modeldir
@@ -102,6 +105,7 @@ PATH_TO_CKPT = os.path.join(CWD_PATH,MODEL_NAME,GRAPH_NAME)
 
 # Path to label map file
 PATH_TO_LABELS = os.path.join(CWD_PATH,MODEL_NAME,LABELMAP_NAME)
+print(PATH_TO_LABELS)
 
 # Load the label map
 labels = {}
@@ -159,9 +163,15 @@ for image_path in images:
     interpreter.invoke()
     inference_times.append(time.time() - inference_time_start)
     # Retrieve detection results
-    boxes = interpreter.get_tensor(output_details[0]['index'])[0] # Bounding box coordinates of detected objects
-    classes = interpreter.get_tensor(output_details[1]['index'])[0] # Class index of detected objects
-    scores = interpreter.get_tensor(output_details[2]['index'])[0] # Confidence of detected objects
+    # for some reasons in my customized TFlite models order of tensors is messed up
+    if args.inversed_tensors:
+        boxes = interpreter.get_tensor(output_details[1]['index'])[0] # Bounding box coordinates of detected objects
+        classes = interpreter.get_tensor(output_details[3]['index'])[0] # Class index of detected objects
+        scores = interpreter.get_tensor(output_details[0]['index'])[0] # Confidence of detected objects
+    else:
+        boxes = interpreter.get_tensor(output_details[0]['index'])[0] # Bounding box coordinates of detected objects
+        classes = interpreter.get_tensor(output_details[1]['index'])[0] # Class index of detected objects
+        scores = interpreter.get_tensor(output_details[2]['index'])[0] # Confidence of detected objects
     #num = interpreter.get_tensor(output_details[3]['index'])[0]  # Total number of detected objects (inaccurate and not needed)
 
     # Loop over all detections and draw detection box if confidence is above minimum threshold
